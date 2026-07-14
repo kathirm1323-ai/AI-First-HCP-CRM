@@ -1,0 +1,4 @@
+export type Mode = 'form' | 'chat'
+export type Interaction = { id: number; hcp?: { id: number; name: string; specialty?: string }; hcp_name?: string; occurred_at: string; interaction_type: 'visit'|'call'|'email'; products: string[]; notes: string; samples_distributed?: string; sentiment?: 'positive'|'neutral'|'negative'; follow_up_action?: string; compliance_flags: string[] }
+export type Draft = { hcp_name: string; occurred_at: string; interaction_type: 'visit'|'call'|'email'; products: string[]; notes: string; samples_distributed: string; sentiment: ''|'positive'|'neutral'|'negative'; follow_up_action: string; follow_up_due_at: string }
+export type Message = { id: string; role: 'user'|'assistant'; content: string; tone?: 'success'; extractedData?: Record<string, unknown>; requiresConfirmation?: boolean; records?: Interaction[] }

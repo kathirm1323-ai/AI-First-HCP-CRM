@@ -1,0 +1,27 @@
+# Secrets and local configuration
+.env
+*.env
+!backend/.env.example
+!frontend/.env.example
+
+# Python
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+
+# Node/Vite
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Local runtime files
+backend/debug-*.log
+run-crm-demo.cmd
+work/
+outputs/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
