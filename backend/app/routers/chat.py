@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from .. import crud, models, schemas
 from ..agents.graph import run_agent
+from ..agents.groq import AIServiceUnavailable
 from ..agents.tools import REQUIRED, edit_interaction
 from ..database import get_db
 
@@ -77,7 +78,7 @@ def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
         pending = {"action": "log_interaction", "data": revised}
         labels = {"hcp_name": "HCP name", "occurred_at": "date and time", "interaction_type": "interaction type", "products": "materials", "notes": "topics", "samples_distributed": "samples", "sentiment": "sentiment", "follow_up_action": "follow-up action", "follow_up_due_at": "follow-up due date"}
         changed = ", ".join(labels.get(field, field.replace("_", " ")) for field in changed_fields) or "your draft"
-        reply = f"Updated {changed} in the interaction draft. Please review the form, then select Log interaction."
+        reply = f"Updated {changed} in the interaction draft. Please review the card, then select Confirm & save."
         persist(db, session, "user", text, pending)
         persist(db, session, "assistant", reply, pending)
         return schemas.ChatResponse(session_id=payload.session_id, reply=reply, action="edit_draft", extracted_data=revised)
@@ -96,7 +97,10 @@ def chat(payload: schemas.ChatRequest, db: Session = Depends(get_db)):
         persist(db, session, "user", text, None)
         persist(db, session, "assistant", reply, None)
         return schemas.ChatResponse(session_id=payload.session_id, reply=reply, action="cancelled")
-    result = run_agent(db, text)
+    try:
+        result = run_agent(db, text)
+    except AIServiceUnavailable as exc:
+        raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
     pending = {"action": result["action"], "data": result.get("extracted_data", {})} if result.get("requires_confirmation") and result.get("extracted_data") else None
     persist(db, session, "user", text, pending)
     persist(db, session, "assistant", result["reply"], pending)

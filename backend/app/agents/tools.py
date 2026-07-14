@@ -10,11 +10,15 @@ REQUIRED = ("hcp_name", "occurred_at", "interaction_type", "notes")
 
 
 def compliance_flags(text: str) -> list[str]:
-    flags = []
-    for term in ("off-label", "guarantee", "cure", "adverse event", "side effect"):
-        if term in text.lower():
-            flags.append(f"Review possible compliance phrase: '{term}'")
-    return flags
+    patterns = {
+        "off-label": r"\boff[-\s]?label\w*\b",
+        "guarantee": r"\bguarantee\w*\b",
+        "cure": r"\bcure\w*\b",
+        "adverse event": r"\badverse\s+event\w*\b",
+        "side effect": r"\bside\s+effect\w*\b",
+    }
+    lowered = text.lower()
+    return [f"Review possible compliance phrase: '{label}'" for label, pattern in patterns.items() if re.search(pattern, lowered)]
 
 
 @tool("log_interaction")
@@ -64,6 +68,15 @@ def inline_edit_fields(request: str) -> dict:
     if channel_match:
         value = next(group for group in channel_match.groups() if group)
         fields["interaction_type"] = "visit" if value.lower() in {"in-person", "in person", "visit", "meeting"} else value.lower()
+    date_match = re.search(r"(?:date|occurred(?:_at)?|visit date)\s+(?:is|to|should be)\s+(\d{4}-\d{2}-\d{2})", request, re.IGNORECASE)
+    if date_match:
+        fields["occurred_at"] = f"{date_match.group(1)}T09:00:00"
+    product_match = re.search(r"(?:product|materials?)\s+(?:is|to|should be)\s+([A-Za-z0-9 -]+)", request, re.IGNORECASE)
+    if product_match:
+        fields["products"] = [product_match.group(1).strip().rstrip(".,")]
+    follow_up_match = re.search(r"follow[- ]up(?: action)?\s+(?:is|to|should be)\s+(.+)", request, re.IGNORECASE)
+    if follow_up_match:
+        fields["follow_up_action"] = follow_up_match.group(1).strip().rstrip(".")
     return fields
 
 
@@ -77,7 +90,15 @@ def edit_interaction(request: str) -> dict:
         f"Correction: {request}",
         complex_reasoning=True,
     )
-    return {**(extracted if isinstance(extracted, dict) else {}), **inline_edit_fields(request)}
+    allowed_fields = {"hcp_name", "occurred_at", "interaction_type", "products", "notes", "samples_distributed", "sentiment", "follow_up_action", "follow_up_due_at"}
+    safe_extracted = {key: value for key, value in extracted.items() if key in allowed_fields and value not in (None, "", [])} if isinstance(extracted, dict) else {}
+    if safe_extracted.get("interaction_type") not in {None, "visit", "call", "email"}:
+        safe_extracted.pop("interaction_type")
+    if safe_extracted.get("sentiment") not in {None, "positive", "neutral", "negative"}:
+        safe_extracted.pop("sentiment")
+    if "products" in safe_extracted and not isinstance(safe_extracted["products"], list):
+        safe_extracted["products"] = [str(safe_extracted["products"])]
+    return {**safe_extracted, **inline_edit_fields(request)}
 
 
 @tool("search_past_interactions")

@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
@@ -5,6 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 from .. import crud, models, schemas
 from .groq import ask_json
+
+logger = logging.getLogger(__name__)
 from .tools import REGISTERED_TOOLS, interaction_draft, log_interaction, edit_interaction, search_past_interactions, schedule_follow_up, suggest_talking_points
 
 
@@ -26,11 +29,21 @@ def classify(state: AgentState) -> AgentState:
         rule_intent = "search_past_interactions"
     elif "follow up" in text or "remind" in text:
         rule_intent = "schedule_follow_up"
-    elif any(phrase in text for phrase in ("talking point", "prepare", "what should i discuss", "what should i talk", "next visit")):
+    elif any(phrase in text for phrase in ("talking point", "prepare", "prep notes", "what should i discuss", "what should i talk", "what should i bring up", "next visit")):
         rule_intent = "suggest_talking_points"
     else:
         rule_intent = "log_interaction"
-    classified = ask_json(f"Classify this CRM rep message: {state['message']}").get("intent")
+    classify_prompt = (
+        "Classify this CRM message into exactly one intent: "
+        "log_interaction (record a completed HCP interaction); "
+        "edit_interaction (change an already logged interaction); "
+        "search_past_interactions (retrieve saved history); "
+        "schedule_follow_up (create a dated future reminder); "
+        "suggest_talking_points (prepare topics before a future visit). "
+        f"Message: {state['message']}"
+    )
+    logger.info("[graph] entering node=classify")
+    classified = ask_json(classify_prompt).get("intent")
     # Guard against an LLM returning a nested JSON object for the intent.
     # The agent should use its safe fallback rather than fail the chat.
     if isinstance(classified, dict):
@@ -46,6 +59,7 @@ def route(state: AgentState) -> str:
 
 
 def log_node(state: AgentState) -> AgentState:
+    logger.info("[graph] entering node=log_interaction intent=%s", state.get("intent"))
     raw = log_interaction.invoke({"free_text": state["message"]})
     draft = interaction_draft(raw)
     missing = raw.get("missing_fields", [])
@@ -55,18 +69,22 @@ def log_node(state: AgentState) -> AgentState:
 
 
 def edit_node(state: AgentState) -> AgentState:
+    logger.info("[graph] entering node=edit_interaction intent=%s", state.get("intent"))
     return {"extracted_data": edit_interaction.invoke({"request": state["message"]}), "reply": "I found the requested changes. Please confirm the update before it is applied."}
 
 
 def search_node(state: AgentState) -> AgentState:
+    logger.info("[graph] entering node=search_past_interactions intent=%s", state.get("intent"))
     return {"extracted_data": search_past_interactions.invoke({"query": state["message"]}), "reply": "I searched the interaction history."}
 
 
 def followup_node(state: AgentState) -> AgentState:
+    logger.info("[graph] entering node=schedule_follow_up intent=%s", state.get("intent"))
     return {"extracted_data": schedule_follow_up.invoke({"request": state["message"]}), "reply": "I prepared that follow-up task. Please confirm to create it."}
 
 
 def talking_node(state: AgentState) -> AgentState:
+    logger.info("[graph] entering node=suggest_talking_points intent=%s", state.get("intent"))
     return {"extracted_data": suggest_talking_points.invoke({"request": state["message"]}), "reply": "I will use this HCP's history to suggest focused talking points."}
 
 

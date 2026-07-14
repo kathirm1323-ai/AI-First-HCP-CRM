@@ -11,21 +11,30 @@ For intent use: intent (log_interaction/edit_interaction/search_past_interaction
 """
 
 
-def llm(complex_reasoning: bool = False) -> ChatGroq | None:
+class AIServiceUnavailable(RuntimeError):
+    """Raised when Groq cannot authenticate or complete a request."""
+
+
+def llm(complex_reasoning: bool = False) -> ChatGroq:
     settings = get_settings()
     if not settings.groq_api_key:
-        return None
-    return ChatGroq(model="llama-3.3-70b-versatile", api_key=settings.groq_api_key, temperature=0, request_timeout=15, max_retries=1)
+        raise AIServiceUnavailable("AI service unavailable, check GROQ_API_KEY")
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=settings.groq_api_key,
+        temperature=0,
+        max_tokens=1000 if complex_reasoning else 500,
+        request_timeout=15,
+        max_retries=1,
+    )
 
 
 def ask_json(prompt: str, complex_reasoning: bool = False) -> dict:
     model = llm(complex_reasoning)
-    if not model:
-        return {}
     try:
         response = model.invoke([SystemMessage(content=EXTRACTION_SYSTEM), HumanMessage(content=prompt)])
-    except Exception:
-        return {}
+    except Exception as exc:
+        raise AIServiceUnavailable("AI service unavailable, check GROQ_API_KEY") from exc
     text = response.content.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]

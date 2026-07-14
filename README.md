@@ -6,7 +6,7 @@ A life-sciences CRM module for field representatives to record Healthcare Profes
 
 - React + Redux Toolkit user interface using Google Inter
 - FastAPI and PostgreSQL backend
-- Groq LLM integration using `llama-3.3-70b-versatile`
+- Groq LLM integration using `llama-3.3-70b-versatile` (documented substitute because Groq deprecated `gemma2-9b-it`)
 - LangGraph workflow with six tools: log interaction, edit interaction, search history, schedule follow-up, suggest talking points, and compliance flag check
 - Human review gate: AI drafts are not saved until **Confirm & save** is selected
 - Voice-note transcription and summarization with an explicit consent step
