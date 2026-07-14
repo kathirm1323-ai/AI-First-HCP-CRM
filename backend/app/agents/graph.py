@@ -1,4 +1,5 @@
-from typing import Annotated, TypedDict
+import re
+from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -19,7 +20,16 @@ def classify(state: AgentState) -> AgentState:
     text = state["message"].lower()
     valid_intents = {"log_interaction", "edit_interaction", "search_past_interactions", "schedule_follow_up", "suggest_talking_points"}
     correction_cues = ("change ", "edit ", "update ", "correct ", "sorry", "name is", "name should be", "instead")
-    fallback = "edit_interaction" if any(cue in text for cue in correction_cues) else "search_past_interactions" if any(cue in text for cue in ("what did", "show", "history", "last time")) else "schedule_follow_up" if "follow up" in text or "remind" in text else "suggest_talking_points" if "talking point" in text or "prepare" in text else "log_interaction"
+    if any(cue in text for cue in correction_cues):
+        rule_intent = "edit_interaction"
+    elif any(cue in text for cue in ("what did", "show", "history", "last time")):
+        rule_intent = "search_past_interactions"
+    elif "follow up" in text or "remind" in text:
+        rule_intent = "schedule_follow_up"
+    elif any(phrase in text for phrase in ("talking point", "prepare", "what should i discuss", "what should i talk", "next visit")):
+        rule_intent = "suggest_talking_points"
+    else:
+        rule_intent = "log_interaction"
     classified = ask_json(f"Classify this CRM rep message: {state['message']}").get("intent")
     # Guard against an LLM returning a nested JSON object for the intent.
     # The agent should use its safe fallback rather than fail the chat.
@@ -27,7 +37,8 @@ def classify(state: AgentState) -> AgentState:
         classified = classified.get("intent") or classified.get("name")
     if not isinstance(classified, str):
         classified = None
-    return {"intent": classified if classified in valid_intents else fallback}
+    intent = rule_intent if rule_intent != "log_interaction" else (classified if classified in valid_intents else rule_intent)
+    return {"intent": intent}
 
 
 def route(state: AgentState) -> str:
@@ -71,7 +82,7 @@ def build_graph():
     graph.add_conditional_edges("classify", route, {name: name for name in ("log_interaction", "edit_interaction", "search_past_interactions", "schedule_follow_up", "suggest_talking_points")})
     for node in ("log_interaction", "edit_interaction", "search_past_interactions", "schedule_follow_up", "suggest_talking_points"):
         graph.add_edge(node, END)
-    return graph.compile()
+    return graph.compile(debug=True)
 
 
 agent_graph = build_graph()
@@ -83,12 +94,18 @@ def run_agent(db: Session, message: str) -> dict:
     if intent == "search_past_interactions":
         requested_name = data.get("hcp_name") if isinstance(data.get("hcp_name"), str) else None
         generic_latest = any(phrase in message.lower() for phrase in ("my latest", "latest interaction", "recent interaction", "show latest"))
-        query = None if generic_latest else (requested_name or message)
-        records = [crud.record_to_dict(x) for x in crud.list_interactions(db, query, 5)]
+        name_in_message = re.search(r"(?:with|for)\s+(Dr\.\s+[A-Za-z]+(?:\s+(?!next\b|about\b|on\b|at\b)[A-Za-z]+)?)", message, re.IGNORECASE)
+        query = None if generic_latest else (requested_name or (name_in_message.group(1) if name_in_message else message))
+        count_match = re.search(r"(?:last|latest)\s+(\d+)\s+interaction", message, re.IGNORECASE)
+        limit = min(int(count_match.group(1)), 30) if count_match else 5
+        records = [crud.record_to_dict(x) for x in crud.list_interactions(db, query, limit)]
         return {"action": intent, "reply": "Here are the most relevant interactions." if records else "No matching interactions were found.", "records": records}
     if intent == "suggest_talking_points":
-        name = data.get("hcp_name", "")
-        records = [crud.record_to_dict(x) for x in crud.list_interactions(db, name, 5)]
+        name = data.get("hcp_name", "") if isinstance(data.get("hcp_name"), str) else ""
+        name_match = re.search(r"Dr\.\s+[A-Za-z]+(?:\s+(?!next\b|about\b|on\b|at\b|today\b|yesterday\b)[A-Za-z]+)?", message)
+        if not name and name_match:
+            name = name_match.group(0)
+        records = [crud.record_to_dict(x) for x in crud.list_interactions(db, name or None, 5)]
         points = [f"Revisit {r['products'] or 'the prior discussion'} from {r['occurred_at'][:10]}." for r in records]
         if any(r.get("follow_up_action") for r in records): points.append("Close any outstanding follow-up actions before introducing a new topic.")
         return {"action": intent, "reply": "Talking points: " + (" ".join(points) if points else "No history yet; ask about current clinical priorities and document consented feedback."), "records": records}

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 from langchain_core.tools import tool
 from sqlalchemy import select
@@ -11,7 +11,7 @@ REQUIRED = ("hcp_name", "occurred_at", "interaction_type", "notes")
 
 def compliance_flags(text: str) -> list[str]:
     flags = []
-    for term in ("off-label", "guaranteed", "cure", "adverse event", "side effect"):
+    for term in ("off-label", "guarantee", "cure", "adverse event", "side effect"):
         if term in text.lower():
             flags.append(f"Review possible compliance phrase: '{term}'")
     return flags
@@ -21,6 +21,27 @@ def compliance_flags(text: str) -> list[str]:
 def log_interaction(free_text: str) -> dict:
     """Extract a field-rep interaction from natural language; always return a confirmation-ready draft."""
     data = ask_json(f"Extract an interaction from: {free_text}")
+    text = free_text.lower()
+    name_match = re.search(r"Dr\.\s+[A-Za-z]+(?:\s+(?!next\b|about\b|on\b|at\b|today\b|yesterday\b)[A-Za-z]+)?", free_text)
+    if name_match and not data.get("hcp_name"):
+        data["hcp_name"] = name_match.group(0)
+    if not data.get("notes"):
+        data["notes"] = free_text.strip()
+    product_match = re.search(r"discussed\s+([A-Za-z][A-Za-z0-9-]*)", free_text, re.IGNORECASE)
+    if product_match and not data.get("products"):
+        data["products"] = [product_match.group(1)]
+    if not data.get("sentiment"):
+        for value in ("positive", "neutral", "negative"):
+            if value in text:
+                data["sentiment"] = value
+                break
+    if "follow-up" in text or "follow up" in text:
+        data.setdefault("follow_up_action", "Follow up with the HCP")
+    now = datetime.now(timezone.utc)
+    if not data.get("occurred_at"):
+        data["occurred_at"] = (now - timedelta(days=1)).isoformat() if "yesterday" in text else now.isoformat()
+    if not data.get("interaction_type"):
+        data["interaction_type"] = "call" if "call" in text else "email" if "email" in text else "visit"
     data["compliance_flags"] = compliance_flags(free_text)
     data["missing_fields"] = list(set(data.get("missing_fields", [])) | {key for key in REQUIRED if not data.get(key)})
     return data
@@ -39,6 +60,10 @@ def inline_edit_fields(request: str) -> dict:
     sentiment_match = re.search(r"sentiment\s+(?:is|should\s+be|to)\s+(positive|neutral|negative)", request, re.IGNORECASE)
     if sentiment_match:
         fields["sentiment"] = sentiment_match.group(1).lower()
+    channel_match = re.search(r"(?:channel|interaction\s+type).*(in[- ]person|visit|meeting|call|email)|(?:change|edit).*(in[- ]person|visit|meeting|call|email)", request, re.IGNORECASE)
+    if channel_match:
+        value = next(group for group in channel_match.groups() if group)
+        fields["interaction_type"] = "visit" if value.lower() in {"in-person", "in person", "visit", "meeting"} else value.lower()
     return fields
 
 
@@ -64,7 +89,20 @@ def search_past_interactions(query: str) -> dict:
 @tool("schedule_follow_up")
 def schedule_follow_up(request: str) -> dict:
     """Extract a dated follow-up task from natural language for confirmation."""
-    return ask_json(f"Extract hcp_name, follow_up_action, and follow_up_due_at from: {request}")
+    data = ask_json(f"Extract hcp_name, follow_up_action, and follow_up_due_at from: {request}")
+    name_match = re.search(r"with\s+(Dr\.\s+[A-Za-z]+(?:\s+(?!next\b|about\b|on\b|at\b)[A-Za-z]+)?)", request, re.IGNORECASE)
+    if name_match and not data.get("hcp_name"):
+        data["hcp_name"] = name_match.group(1)
+    if not data.get("follow_up_action"):
+        data["follow_up_action"] = request.strip()
+    if not data.get("follow_up_due_at"):
+        today = datetime.now(timezone.utc)
+        if "next friday" in request.lower():
+            days = (4 - today.weekday()) % 7 or 7
+            data["follow_up_due_at"] = (today + timedelta(days=days)).replace(hour=9, minute=0, second=0, microsecond=0).isoformat()
+        elif "next week" in request.lower():
+            data["follow_up_due_at"] = (today + timedelta(days=7)).replace(hour=9, minute=0, second=0, microsecond=0).isoformat()
+    return data
 
 
 @tool("suggest_talking_points")

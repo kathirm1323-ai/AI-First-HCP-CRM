@@ -1,72 +1,73 @@
-# AI-First CRM — HCP Log Interaction Module
+# AI-First HCP CRM
 
-A production-oriented starter for pharmaceutical field representatives to record HCP interactions through a structured form or a conversational, confirmation-first AI assistant.
+A life-sciences CRM module for field representatives to record Healthcare Professional (HCP) interactions through a structured React form or a LangGraph-powered AI conversation.
 
-## Architecture
+## Features
 
-```text
-React + Redux (Vite)                     FastAPI + SQLAlchemy                 PostgreSQL
- ├─ Structured interaction form ───────► POST /interactions ───────────────► HCP / Interaction
- └─ Chat + review card ────────────────► POST /chat ─► LangGraph ──────────► FollowUp / ChatSession
-                                                        │
-                                                   Groq ChatGroq
-                                              llama-3.3-70b-versatile (default; gemma2-9b-it was decommissioned by Groq)
-                                              llama-3.3-70b-versatile (complex edits)
+- React + Redux Toolkit user interface using Google Inter
+- FastAPI and PostgreSQL backend
+- Groq LLM integration using `llama-3.3-70b-versatile`
+- LangGraph workflow with six tools: log interaction, edit interaction, search history, schedule follow-up, suggest talking points, and compliance flag check
+- Human review gate: AI drafts are not saved until **Confirm & save** is selected
+- Voice-note transcription and summarization with an explicit consent step
+
+## Run locally
+
+### 1. Start PostgreSQL
+
+Install Docker Desktop, then run from the repository root:
+
+```bash
+docker compose up -d
 ```
 
-The chat workflow only creates or changes records after the representative selects **Confirm & save**. Conversation history and a pending action are retained in `ChatSession`, so the confirmation step survives separate requests.
+### 2. Configure the backend
 
-## Repository layout
-
-```text
-backend/
-  app/agents/       LangGraph, Groq client, and registered tools
-  app/routers/      FastAPI endpoints
-  app/models.py     PostgreSQL ORM models
-frontend/
-  src/components/   Form, conversational UI, review card, history
-  src/store/        Redux Toolkit state
+```bash
+cd backend
+copy .env.example .env
 ```
 
-## Setup
+Set `GROQ_API_KEY` in `backend/.env`. Do not commit this file.
 
-Prerequisites: Python 3.11+, Node 20+, and a running PostgreSQL database.
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-1. Create a database, for example `createdb hcp_crm`.
-2. Copy `backend/.env.example` to `backend/.env`, then set `DATABASE_URL` and the required `GROQ_API_KEY`. Never commit this file.
-3. In `backend`, create/activate a virtual environment and run `pip install -r requirements.txt`.
-4. Start the API from `backend`: `uvicorn app.main:app --reload --port 8000`.
-5. Copy `frontend/.env.example` to `frontend/.env`. Update `VITE_API_URL` only if the API is not on port 8000.
-6. In `frontend`, run `npm install` and `npm run dev`.
+Open FastAPI Swagger documentation at `http://127.0.0.1:8000/docs`.
 
-On startup the API creates the four PostgreSQL tables: `hcps`, `interactions`, `follow_ups`, and `chat_sessions`. Use migrations (Alembic) before deploying beyond this starter implementation.
+### 3. Configure the frontend
 
-## API
+Open a second terminal:
 
-| Endpoint | Purpose |
-| --- | --- |
-| `POST /interactions` | Create a validated interaction from the form |
-| `PUT /interactions/{id}` | Update a known interaction |
-| `GET /interactions?q=` | List or filter interaction history |
-| `GET /hcps` | List HCPs for UI state |
-| `POST /chat` | Send a message through the LangGraph orchestration workflow |
+```bash
+cd frontend
+copy .env.example .env
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`.
+
+## Verification flow
+
+1. Choose **Structured form** or **AI conversation**.
+2. In AI conversation, describe an HCP interaction in natural language.
+3. Review the extracted card and select **Confirm & save**.
+4. Search saved history with: `Show my latest interaction.`
 
 ## LangGraph tools
 
-`REGISTERED_TOOLS` contains six LangChain tools (five required, plus compliance checking):
+1. `log_interaction` extracts an interaction draft.
+2. `edit_interaction` stages updates to the latest matching interaction.
+3. `search_past_interactions` retrieves database records only.
+4. `schedule_follow_up` stages a dated reminder.
+5. `suggest_talking_points` uses prior interaction history.
+6. `compliance_flag_check` flags terms such as guarantee, cure, off-label, adverse event, and side effect.
 
-1. **log_interaction** extracts HCP, time, channel, products, samples, sentiment, notes, and follow-up details. Required-field gaps become a clarification request.
-2. **edit_interaction** maps conversational changes to an update draft. The API applies it only after confirmation.
-3. **search_past_interactions** identifies an HCP/search context; the orchestrator safely retrieves relevant database records.
-4. **schedule_follow_up** extracts an HCP, action, and due date and stages a reminder for confirmation.
-5. **suggest_talking_points** uses prior interaction records and open action context to form visit preparation prompts.
-6. **compliance_flag_check** highlights phrases such as off-label, guarantee, cure, adverse event, and side effect for review. It is deliberately a guardrail, not a compliance decision.
+## Safety notes
 
-The graph uses `llama-3.3-70b-versatile` for classification and extraction because Groq decommissioned `gemma2-9b-it`. The frontend renders extracted data as a confirmable card; replying `confirm` is the only path that persists a staged AI operation.
-
-## Assumptions and production notes
-
-- Voice is converted to text before calling `/chat`.
-- HCP names are unique in this demo. A real deployment should use a master-data identifier and tenant/territory scoping.
-- Authentication, role-based access, audit events, encryption, consent tracking, adverse-event workflows, and formal compliance approval are required before regulated production use.
-- The LLM may return incomplete data. The system treats missing required fields as a request for clarification and does not fabricate values.
+This is a demonstration project. A regulated production CRM would require authentication, audit trails, formal compliance workflows, role-based access, encryption, and robust adverse-event reporting.

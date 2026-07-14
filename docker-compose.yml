@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hcp-crm-postgres
+    environment:
+      POSTGRES_DB: hcp_crm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - hcp_crm_data:/var/lib/postgresql/data
+volumes:
+  hcp_crm_data:

@@ -59,7 +59,7 @@ def commit_pending(db: Session, pending: dict) -> str:
         return f"Created a follow-up for {hcp.name}."
     if action == "edit_interaction":
         name = data.get("hcp_name", "")
-        record = next(iter(crud.list_interactions(db, name, 1)), None)
+        record = next(iter(crud.list_interactions(db, name or None, 1)), None)
         if not record:
             return "I couldn't find an interaction to update. Please specify the HCP and date."
         allowed = {key: value for key, value in data.items() if key in schemas.InteractionUpdate.model_fields and value is not None}

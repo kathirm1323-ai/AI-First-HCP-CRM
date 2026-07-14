@@ -15,14 +15,17 @@ def llm(complex_reasoning: bool = False) -> ChatGroq | None:
     settings = get_settings()
     if not settings.groq_api_key:
         return None
-    return ChatGroq(model="llama-3.3-70b-versatile", api_key=settings.groq_api_key, temperature=0)
+    return ChatGroq(model="llama-3.3-70b-versatile", api_key=settings.groq_api_key, temperature=0, request_timeout=15, max_retries=1)
 
 
 def ask_json(prompt: str, complex_reasoning: bool = False) -> dict:
     model = llm(complex_reasoning)
     if not model:
         return {}
-    response = model.invoke([SystemMessage(content=EXTRACTION_SYSTEM), HumanMessage(content=prompt)])
+    try:
+        response = model.invoke([SystemMessage(content=EXTRACTION_SYSTEM), HumanMessage(content=prompt)])
+    except Exception:
+        return {}
     text = response.content.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]

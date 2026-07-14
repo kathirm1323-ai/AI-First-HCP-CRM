@@ -1,7 +1,8 @@
 import { FormEvent, useState } from 'react'
 import { sendChat } from '../services/api'
 import { useAppDispatch, useAppSelector } from '../hooks'
-import { addMessage, clearConfirmations, patchDraft } from '../store/crmSlice'
+import { addMessage, clearConfirmations, loadDashboard, patchDraft } from '../store/crmSlice'
+import { ConfirmCard } from './ConfirmCard'
 import type { Draft } from '../types'
 
 const sessionId = crypto.randomUUID()
@@ -30,6 +31,20 @@ export function ChatPanel() {
     dispatch(patchDraft(update))
   }
 
+  const sendDecision = async (decision: 'confirm' | 'cancel') => {
+    if (sending) return
+    setSending(true)
+    dispatch(addMessage({ id: crypto.randomUUID(), role: 'user', content: decision }))
+    try {
+      const response = await sendChat(sessionId, decision, draft)
+      dispatch(clearConfirmations())
+      dispatch(addMessage({ id: crypto.randomUUID(), role: 'assistant', content: response.reply, tone: decision === 'confirm' ? 'success' : undefined, records: response.records }))
+      if (decision === 'confirm') dispatch(loadDashboard())
+    } catch {
+      dispatch(addMessage({ id: crypto.randomUUID(), role: 'assistant', content: 'The CRM could not complete that action. Please try again.' }))
+    } finally { setSending(false) }
+  }
+
   const submit = async (e?: FormEvent) => {
     e?.preventDefault()
     const text = input.trim()
@@ -41,8 +56,8 @@ export function ChatPanel() {
     try {
       const response = await sendChat(sessionId, text, draft)
       applyExtraction(response.extracted_data)
-      const applied = (response.action === 'log_interaction' || response.action === 'edit_draft') && response.extracted_data && !response.extracted_data.missing_fields?.length
-      dispatch(addMessage({ id: crypto.randomUUID(), role: 'assistant', content: applied ? (response.action === 'edit_draft' ? response.reply : 'Interaction draft applied to the form. Review the fields on the left, then select Log interaction.') : response.reply, tone: applied ? 'success' : undefined, extractedData: response.extracted_data, records: response.records }))
+      const needsReview = Boolean(response.requires_confirmation && response.extracted_data)
+      dispatch(addMessage({ id: crypto.randomUUID(), role: 'assistant', content: response.reply, tone: needsReview ? 'success' : undefined, extractedData: response.extracted_data, requiresConfirmation: needsReview, records: response.records }))
     } catch {
       dispatch(addMessage({ id: crypto.randomUUID(), role: 'assistant', content: 'I could not reach the CRM service. Please try again.' }))
     } finally { setSending(false) }
@@ -50,8 +65,8 @@ export function ChatPanel() {
 
   return <aside className="chat-panel">
     <header className="assistant-header"><div className="assistant-mark">AI</div><div><h2>AI Assistant</h2><p>Log interaction details here via chat</p></div></header>
-    <div className="chat-intro">Log interaction details here (for example: “Met Dr. Smith, discussed CardioX efficacy, positive sentiment, shared brochure”) or ask for help.</div>
-    <div className="messages" aria-live="polite">{messages.map(message => <div className={`message ${message.role} ${message.tone ?? ''}`} key={message.id}><div className="bubble">{message.content}</div>{message.records?.map(record => <div className="history-result" key={record.id}><strong>{record.hcp_name ?? record.hcp?.name ?? 'Unknown HCP'}</strong><br />{record.notes || 'No notes recorded.'}<details className="history-details"><summary>View full details</summary><dl><div><dt>Date</dt><dd>{record.occurred_at ? new Date(record.occurred_at).toLocaleString() : 'Not recorded'}</dd></div><div><dt>Interaction type</dt><dd>{record.interaction_type ?? 'Not recorded'}</dd></div><div><dt>Materials</dt><dd>{record.products?.length ? record.products.join(', ') : 'None'}</dd></div><div><dt>Samples</dt><dd>{record.samples_distributed ?? 'None'}</dd></div><div><dt>Sentiment</dt><dd>{record.sentiment ?? 'Not recorded'}</dd></div><div><dt>Follow-up</dt><dd>{record.follow_up_action ?? 'None'}</dd></div></dl></details></div>)}</div>)}</div>
+    <div className="chat-intro">Describe an HCP interaction naturally. I will extract the details and show a review card before anything is saved.</div>
+    <div className="messages" aria-live="polite">{messages.map(message => <div className={`message ${message.role} ${message.tone ?? ''}`} key={message.id}><div className="bubble">{message.content}</div>{message.requiresConfirmation && message.extractedData && <ConfirmCard data={message.extractedData} onConfirm={() => sendDecision('confirm')} onCancel={() => sendDecision('cancel')} disabled={sending} />}{message.records?.map(record => <div className="history-result" key={record.id}><strong>{record.hcp_name ?? record.hcp?.name ?? 'Unknown HCP'}</strong><br />{record.notes || 'No notes recorded.'}<details className="history-details"><summary>View full details</summary><dl><div><dt>Date</dt><dd>{record.occurred_at ? new Date(record.occurred_at).toLocaleString() : 'Not recorded'}</dd></div><div><dt>Interaction type</dt><dd>{record.interaction_type ?? 'Not recorded'}</dd></div><div><dt>Materials</dt><dd>{record.products?.length ? record.products.join(', ') : 'None'}</dd></div><div><dt>Samples</dt><dd>{record.samples_distributed ?? 'None'}</dd></div><div><dt>Sentiment</dt><dd>{record.sentiment ?? 'Not recorded'}</dd></div><div><dt>Follow-up</dt><dd>{record.follow_up_action ?? 'None'}</dd></div></dl></details></div>)}</div>)}</div>
     <form className="chat-input" onSubmit={submit}><textarea rows={2} value={input} onChange={e => setInput(e.target.value)} placeholder="Describe interaction..." /><button className="ai-log-button" disabled={sending}>{sending ? '...' : 'AI Log'}</button></form>
   </aside>
 }
